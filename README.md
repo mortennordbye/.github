@@ -12,6 +12,8 @@ Every repository uses Dependabot with a 7-day cooldown. Security updates go in a
 - `dependabot-ci-failed.yml` labels a red Dependabot pull request `ci-failed` and requests a
   review from the owner. This is the only case that needs a person.
 
+The repository needs the labels `needs-review` and `ci-failed`. Without them the label step fails.
+
 There are two tiers:
 
 - Active repositories (headroom, logeverylift, verksted): patch, minor and security updates
