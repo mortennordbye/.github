@@ -1,0 +1,74 @@
+name: Dependabot auto-merge
+
+# `--auto` only asks GitHub to merge once the required checks pass. A repo that
+# calls this without required checks in its ruleset merges on contact.
+on:
+  workflow_call:
+    inputs:
+      allow-major:
+        description: Also auto-merge semver majors (quiet repos).
+        type: boolean
+        default: false
+      skip-directories:
+        description: JSON list of manifest directories that always wait for a person.
+        type: string
+        default: "[]"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    env:
+      # Dependabot-triggered runs read the Dependabot secret store, not the Actions one.
+      HAS_APP: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # A merge made with GITHUB_TOKEN triggers no push workflow, so releases and
+      # image builds would never run for a merged update. A merge by the App does.
+      - id: app-token
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # `security` is the group name every `applies-to: security-updates` group must use.
+      # For a grouped PR, update-type is the largest bump in the group.
+      - id: decide
+        env:
+          GROUP: ${{ steps.meta.outputs.dependency-group }}
+          UPDATE: ${{ steps.meta.outputs.update-type }}
+          DIR: ${{ steps.meta.outputs.directory }}
+          ALLOW_MAJOR: ${{ inputs.allow-major }}
+          SKIP: ${{ inputs.skip-directories }}
+        run: |
+          merge=false
+          if [ "$GROUP" = security ] || [ "$UPDATE" != version-update:semver-major ] || [ "$ALLOW_MAJOR" = true ]; then
+            merge=true
+          fi
+          if printf '%s' "$SKIP" | jq -e --arg d "$DIR" 'index($d) != null' >/dev/null; then
+            merge=false
+          fi
+          echo "merge=$merge" >> "$GITHUB_OUTPUT"
+
+      - if: steps.decide.outputs.merge == 'true'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+
+      - if: steps.decide.outputs.merge != 'true'
+        run: gh pr edit "$PR_URL" --add-label needs-review --add-reviewer "$OWNER"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          OWNER: ${{ github.repository_owner }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
